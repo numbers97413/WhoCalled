@@ -1,6 +1,6 @@
+package com.example.whocalledme
+
 import android.Manifest
-import android.app.Activity
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.database.Cursor
 import android.net.Uri
@@ -9,6 +9,8 @@ import android.os.Bundle
 import android.provider.CallLog
 import android.widget.Button
 import android.widget.Toast
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -20,7 +22,6 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val PERMISSIONS_REQUEST_CODE = 100
-        private const val CREATE_FILE_REQUEST_CODE = 101
     }
 
     // For devices below Android Q, we require WRITE_EXTERNAL_STORAGE;
@@ -40,9 +41,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Activity Result Launcher for creating a CSV file.
+    private lateinit var createDocumentLauncher: ActivityResultLauncher<String>
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        // Initialize the ActivityResultLauncher for creating a CSV file.
+        createDocumentLauncher =
+            registerForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri: Uri? ->
+                if (uri != null) {
+                    writeCSVToUri(uri)
+                } else {
+                    Toast.makeText(this, "File not created", Toast.LENGTH_SHORT).show()
+                }
+            }
 
         val buttonExtract = findViewById<Button>(R.id.buttonExtract)
         buttonExtract.setOnClickListener {
@@ -54,15 +68,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun hasPermissions(): Boolean {
-        return requiredPermissions.all {
+    private fun hasPermissions(): Boolean =
+        requiredPermissions.all {
             ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
         }
-    }
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int, permissions: Array<out String>, grantResults: IntArray
-    ) {
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == PERMISSIONS_REQUEST_CODE) {
             if (grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
@@ -73,29 +84,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Launch an intent to let the user choose where to save the CSV file.
+    // Launches the document creation flow.
     private fun createCSVFile() {
-        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = "text/csv"
-            putExtra(Intent.EXTRA_TITLE, "call_log.csv")
-        }
-        startActivityForResult(intent, CREATE_FILE_REQUEST_CODE)
+        createDocumentLauncher.launch("call_log.csv")
     }
 
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == CREATE_FILE_REQUEST_CODE && resultCode == Activity.RESULT_OK) {
-            val uri: Uri? = data?.data
-            if (uri != null) {
-                writeCSVToUri(uri)
-            } else {
-                Toast.makeText(this, "File not created", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    // Write the CSV content to the URI provided by the SAF.
+    // Writes the CSV data to the provided URI.
     private fun writeCSVToUri(uri: Uri) {
         val csvContent = generateCSV()
         try {
@@ -109,13 +103,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Query the call log and generate a CSV-formatted String including contact names.
+    // Queries the call log and generates CSV-formatted text.
     private fun generateCSV(): String {
-        // Updated CSV header to include ContactName.
         val csvHeader = "Type,PhoneNumber,ContactName,Date,Duration"
         val stringBuilder = StringBuilder().apply { append(csvHeader).append("\n") }
 
-        // Add CACHED_NAME to the projection.
         val projection = arrayOf(
             CallLog.Calls.TYPE,
             CallLog.Calls.NUMBER,
@@ -134,12 +126,17 @@ class MainActivity : AppCompatActivity() {
 
         if (cursor != null && cursor.moveToFirst()) {
             do {
-                val callType = cursor.getInt(cursor.getColumnIndex(CallLog.Calls.TYPE))
-                val phoneNumber = cursor.getString(cursor.getColumnIndex(CallLog.Calls.NUMBER))
-                // Retrieve the cached contact name; if null, use an empty string.
-                val contactName = cursor.getString(cursor.getColumnIndex(CallLog.Calls.CACHED_NAME)) ?: ""
-                val callDate = cursor.getLong(cursor.getColumnIndex(CallLog.Calls.DATE))
-                val duration = cursor.getString(cursor.getColumnIndex(CallLog.Calls.DURATION))
+                val typeIndex = cursor.getColumnIndexOrThrow(CallLog.Calls.TYPE)
+                val numberIndex = cursor.getColumnIndexOrThrow(CallLog.Calls.NUMBER)
+                val cachedNameIndex = cursor.getColumnIndexOrThrow(CallLog.Calls.CACHED_NAME)
+                val dateIndex = cursor.getColumnIndexOrThrow(CallLog.Calls.DATE)
+                val durationIndex = cursor.getColumnIndexOrThrow(CallLog.Calls.DURATION)
+
+                val callType = cursor.getInt(typeIndex)
+                val phoneNumber = cursor.getString(numberIndex)
+                val contactName = cursor.getString(cachedNameIndex) ?: ""
+                val callDate = cursor.getLong(dateIndex)
+                val duration = cursor.getString(durationIndex)
 
                 val callTypeString = when (callType) {
                     CallLog.Calls.INCOMING_TYPE -> "Incoming"
